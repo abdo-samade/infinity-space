@@ -18,13 +18,13 @@ const pub='http://127.0.0.1:19430',admin='http://127.0.0.1:19431';let child,cook
 const request=async(route,method='GET',data,privateApp=false)=>{const r=await fetch((privateApp?admin:pub)+'/api/'+route,{method,headers:{'Content-Type':'application/json',...(privateApp&&cookie?{cookie}:{})},...(data!==undefined?{body:JSON.stringify(data)}:{})});return {status:r.status,body:await r.json(),headers:r.headers};};
 async function save(forms){const r=await request('site','PUT',{...site,forms},true);assert.equal(r.status,200,JSON.stringify(r.body));site=(await request('site','GET',undefined,true)).body;return site;}
 before(async()=>{
- for(const name of ['server.mjs','activity-store.mjs','public','admin'])cpSync(new URL('./'+name,import.meta.url),path.join(dir,name),{recursive:true});
+ for(const name of ['server.mjs','activity-store.mjs','team-store.mjs','public','admin'])cpSync(new URL('./'+name,import.meta.url),path.join(dir,name),{recursive:true});
  for(const name of ['logo-club.png','logo-fsbm.png','logo-club-dark.png'])rmSync(path.join(dir,'public/assets',name),{force:true});
  mkdirSync(path.join(dir,'data'));const db=new DatabaseSync(path.join(dir,'data/club.sqlite'));
  db.exec('CREATE TABLE content (id TEXT PRIMARY KEY,value TEXT);CREATE TABLE responses (id INTEGER PRIMARY KEY,form TEXT,created TEXT,value TEXT);');
  db.prepare('INSERT INTO content VALUES (?,?)').run('site',JSON.stringify({forms:[legacy],announcements:[],members:[]}));
  db.prepare('INSERT INTO responses VALUES (?,?,?,?)').run(1,'legacy',new Date().toISOString(),JSON.stringify({nom:'Ancien membre',jeu:'A'}));db.close();
- child=spawn(process.execPath,['server.mjs'],{cwd:dir,env:{...process.env,DATA_DIR:path.join(dir,'data'),ACTIVITIES_DIR:path.join(dir,'data/activities'),PORT:'19430',ADMIN_PORT:'19431',ADMIN_PASSWORD:'test-only-password'},stdio:['ignore','pipe','pipe']});
+ child=spawn(process.execPath,['server.mjs'],{cwd:dir,env:{...process.env,DATA_DIR:path.join(dir,'data'),ACTIVITIES_DIR:path.join(dir,'data/activities'),TEAM_FILE:path.join(dir,'data/team.js'),PORT:'19430',ADMIN_PORT:'19431',ADMIN_PASSWORD:'test-only-password'},stdio:['ignore','pipe','pipe']});
  await new Promise((resolve,reject)=>{let output='',errors='';const timer=setTimeout(()=>reject(Error('Startup timeout '+errors)),10000);child.stderr.on('data',c=>errors+=c);child.stdout.on('data',c=>{output+=c;if(output.includes('Separate admin')){clearTimeout(timer);resolve();}});child.on('error',reject);child.once('exit',code=>{clearTimeout(timer);reject(Error('Server exited '+code+' '+errors));});});
  const login=await request('login','POST',{password:'test-only-password'},true);assert.equal(login.status,200);cookie=login.headers.get('set-cookie').split(';')[0];site=(await request('site','GET',undefined,true)).body;
 });
@@ -155,9 +155,22 @@ test('manual cell-file edits reload immediately and stale admin saves cannot ove
 });
 test('a duplicate server startup exits without migrating or touching activity source files',async()=>{
  const blocked=path.join(dir,'blocked-data');
- const process2=spawn(process.execPath,['server.mjs'],{cwd:dir,env:{...process.env,DATA_DIR:blocked,ACTIVITIES_DIR:path.join(blocked,'activities'),PORT:'19430',ADMIN_PORT:'19431',ADMIN_PASSWORD:'test-only-password'},stdio:['ignore','ignore','pipe']});
+ const process2=spawn(process.execPath,['server.mjs'],{cwd:dir,env:{...process.env,DATA_DIR:blocked,ACTIVITIES_DIR:path.join(blocked,'activities'),TEAM_FILE:path.join(blocked,'team.js'),PORT:'19430',ADMIN_PORT:'19431',ADMIN_PASSWORD:'test-only-password'},stdio:['ignore','ignore','pipe']});
  let errors='';process2.stderr.on('data',chunk=>errors+=chunk);
  const code=await new Promise((resolve,reject)=>{const timer=setTimeout(()=>{process2.kill();reject(Error('Duplicate server did not exit'));},5000);process2.once('exit',code=>{clearTimeout(timer);resolve(code);});process2.once('error',reject);});
- assert.equal(code,1);assert.match(errors,/Port déjà utilisé/);assert.equal(existsSync(path.join(blocked,'activities')),false);
+ assert.equal(code,1);assert.match(errors,/Port déjà utilisé/);assert.equal(existsSync(path.join(blocked,'activities')),false);assert.equal(existsSync(path.join(blocked,'team.js')),false);
  assert.equal((await request('site')).status,200);
+});
+
+test('team file edits reload, stale manager saves are refused, and member details persist',async()=>{
+ site=(await request('site','GET',undefined,true)).body;
+ const filename=path.join(dir,'data/team.js');
+ const value={legacyMigrated:true,members:[{id:'file-member',name:'Amal El Fassi',role:'Présidente',roleAr:'الرئيسة',mandate:'Mandat 2026',photo:'/img/amal.webp',bio:'Amal accompagne les projets du bureau.',bioAr:'تواكب أمل مشاريع المكتب.',quote:'Chaque voix compte.',quoteAr:'لكل صوت قيمة.',tone:'doré',isPresident:true,links:{instagram:'https://instagram.com/amal',email:'amal@example.com'}}]};
+ writeFileSync(filename,'export default '+JSON.stringify(value)+';\n');
+ const current=(await request('site')).body;assert.equal(current.members[0].firstName,'Amal');assert.equal(current.members[0].image,'/img/amal.webp');assert.equal(current.members[0].email,'amal@example.com');assert.equal(current.teamRevision,undefined);
+ assert.equal((await request('site','PUT',site,true)).status,409);
+ site=(await request('site','GET',undefined,true)).body;site.members[0].quote='Une citation modifiée dans le manager.';
+ const saved=await request('site','PUT',site,true);assert.equal(saved.status,200);assert.ok(saved.body.teamRevision);assert.match(readFileSync(filename,'utf8'),/Une citation modifiée/);
+ site=(await request('site','GET',undefined,true)).body;assert.equal(site.members[0].email,'amal@example.com');assert.equal(site.members[0].tone,'doré');
+ assert.equal((await request('site','PUT',{...site,members:[{...site.members[0],email:'bad?email@example.com'}]},true)).status,400);
 });

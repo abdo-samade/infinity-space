@@ -131,3 +131,29 @@ Le slogan demandé **« Infinity pation in one space »** est conservé tel que 
 Les textes HTML suivent strictement la langue sélectionnée : l’arabe n’utilise plus les champs français comme repli, ni l’inverse. Les caractères de l’autre écriture sont retirés du rendu public, sans modifier les valeurs sauvegardées. Renseigner `firstNameAr`, `lastNameAr`, `roleAr`, les descriptions et les titres arabes dans le manager pour un contenu complet. Quelques rôles courants (présidence, secrétariat, RH…) disposent d’un libellé arabe ; un nom arabe absent utilise le repère « عضو المكتب ». Les logos, les textes incorporés aux images et les valeurs saisies par les visiteurs restent leurs originaux. Le bouton de langue est lui-même écrit dans la langue courante.
 
 Le hero retrouve son décor de poster de campus incliné et affiche directement **Infinity pation in one space** comme grand titre en français, et son équivalent arabe. Les cartes du bureau ont des postes / logos plus grands et une marge intérieure ; la grande carte utilise un cadre 4:5 fixe, sans étirement sur la hauteur des deux rangées, avec la photo centrée horizontalement et verticalement dans son cadre.
+
+### Présentation éditoriale de `/team`
+
+Les cartes détaillées utilisent le composant réutilisable `TeamMemberCard` et le fichier unique **`data/team.js`**. Au premier démarrage après cette mise à jour, les membres déjà enregistrés en SQLite sont importés une seule fois, avec leurs noms, portraits, textes, ordre et présidence. Aucun membre ni texte personnel n’est inventé. Les cartes de l’accueil, le hero de l’équipe, le compteur, le texte sur la transmission des rôles, le header et le footer conservent leur présentation.
+
+Le manager **Bureau** modifie ce même fichier : prénom et nom séparés, textes FR/AR, année, description personnelle, citation facultative, teinte du portrait et liens Instagram / LinkedIn / e-mail. Son aperçu propose la carte détaillée ou celle de l’accueil. La description détaillée utilise la biographie du membre, puis ses responsabilités si la biographie est vide ; aucun paragraphe commun n’est répété. Les descriptions sont limitées visuellement à deux lignes ; leur texte complet reste dans le document et dans l’infobulle.
+
+Pour une édition manuelle, conserver l’objet `{ legacyMigrated: true, members: [...] }`, ou exporter directement un tableau. Exemple de structure d’un membre (à compléter avec ses vraies informations) :
+
+```js
+{
+  id: "identifiant-stable",
+  firstName: "…", lastName: "…", firstNameAr: "…", lastNameAr: "…",
+  role: "…", roleAr: "…", year: "2026",
+  bio: "Description propre à cette personne.", bioAr: "…",
+  quote: "", quoteAr: "",
+  photo: "/img/portrait.webp",
+  tone: "bleuVert", // bleuVert | doré | grisBleu | beigeFoncé
+  links: { instagram: "", linkedin: "", email: "" },
+  isPresident: false, displayOrder: 0, groupOrder: 0
+}
+```
+
+Les alias `name` et `mandate` / `mandateAr` sont également acceptés à la place d’un nom séparé ou d’une année. Les numéros 01, 02… et l’alternance des portraits sont calculés automatiquement selon l’ordre affiché, avec la présidence en premier. Une modification manuelle apparaît après actualisation ; un manager resté ouvert refuse d’écraser une version plus récente du fichier. Sauvegarder **`data/team.js`**, la base SQLite et les dossiers d’images ensemble. La variable facultative `TEAM_FILE` permet de choisir un autre emplacement.
+
+Le décor et les effets sont limités à `/team` : motifs SVG aléatoires, véritable logo en filigrane, apparitions au défilement, léger parallax et progression de lecture. La palette repose exclusivement sur les variables existantes et leurs mélanges ; aucun mode sombre supplémentaire n’est introduit. `prefers-reduced-motion` désactive les apparitions animées, le parallax et le zoom. Aucune dépendance n’est ajoutée.

@@ -18,6 +18,7 @@ export function ActivityArticle(value,lang='fr',index=0){
 }
 
 const paths={
+ infinity:'M12 12C9 7 7 5 4 7c-5 4-1 13 4 9l8-8c5-4 9 5 4 9-3 2-5 0-8-5Z',
  pawn:'M8 21h8M6 18h12l-4-7V8h-4v3ZM9 5h6M12 2v6',
  checkers:'M3 3h18v18H3zM3 9h18M3 15h18M9 3v18M15 3v18M6 6h.01M12 12h.01M18 18h.01',
  pingpong:'M15 3a7 7 0 1 0 3 12c4-4 3-10-3-12ZM8 15l-5 6 2 1 5-5M8 5l10 9M20 21h.01',

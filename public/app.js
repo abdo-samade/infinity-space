@@ -6,6 +6,7 @@ import {footerView} from './footer-view.js';
 import {CELLS,activitiesPage} from './activities-view.js';
 import {bindLightbox} from './lightbox.js';
 import {mountArticleEffects} from './activity-article.js';
+import {mountTeamEffects} from './team-effects.js';
 import {CELL_DOODLES} from './activity-schema.js';
 
 let lang=localStorage.getItem('language')==='ar'?'ar':'fr',site;
@@ -34,9 +35,9 @@ function formFeed(){
  return `<div class="form-invitations">${site.forms.map(f=>`<article class="form-invitation"><div class="form-invitation-copy"><div class="eyebrow">${t('UN PREMIER PAS VERS LE COLLECTIF','خطوتك الأولى للمشاركة')}</div><h3>${e(text(f,'title'))}</h3><p>${e(text(f,'description'))}</p><p class="form-invitation-note">${f.closed?t('Les inscriptions à cette activité sont closes. Retrouvez bientôt nos prochains rendez-vous.','التسجيل في هذا النشاط مغلق. ترقب مواعيدنا القادمة.'):t('Envie de participer ? Remplissez le formulaire à côté. Quelques questions suffisent pour nous rejoindre.','هل ترغب في المشاركة؟ املأ الاستمارة بجانبك. أسئلة قليلة تكفي للانضمام إلينا.')}</p></div><div class="participate-card">${safeImage(f.image)?`<img class="invitation-header" src="${e(f.image)}" alt="" loading="lazy">`:''}<div><span class="badge ${f.closed?'closed':''}">${f.closed?t('Inscriptions closes','التسجيل مغلق'):t('Inscriptions ouvertes','التسجيل مفتوح')}</span><h3>${e(text(f,'title'))}</h3><a class="button" href="/forms/${encodeURIComponent(f.id)}">${f.closed?t('Voir le formulaire','عرض الاستمارة'):t('Remplir le formulaire','املأ الاستمارة')}${icon('arrow')}</a></div></div></article>`).join('')}</div>`;
 }
 function render(){
- disposeArticle();disposeArticle=()=>{};app.classList.remove('activity-article-page');
+ disposeArticle();disposeArticle=()=>{};app.classList.remove('activity-article-page','team-page');
  frame();
- if(/^\/team\/?$/.test(location.pathname)){document.title=t('Notre équipe · Infinity Space','فريقنا · إنفينيتي سبيس');app.innerHTML=teamPage(site.members,lang,site);bindLightbox(app,lang);return;}
+ if(/^\/team\/?$/.test(location.pathname)){document.title=t('Notre équipe · Infinity Space','فريقنا · إنفينيتي سبيس');app.classList.add('team-page');app.innerHTML=teamPage(site.members,lang,site);bindLightbox(app,lang);disposeArticle=mountTeamEffects(app);return;}
  const activityRoute=location.pathname.match(/^\/activities(?:\/([^/]+))?\/?$/);
  if(activityRoute){document.title=t('Nos activités · Infinity Space','أنشطتنا · إنفينيتي سبيس');app.innerHTML=activitiesPage(site,lang,activityRoute[1]||'');bindLightbox(app,lang);if(CELL_DOODLES[activityRoute[1]]){app.classList.add('activity-article-page');disposeArticle=mountArticleEffects(app,site.activityCells?.[activityRoute[1]]?.doodles||CELL_DOODLES[activityRoute[1]]);}return;}
  const formId=location.pathname.match(/^\/forms\/([^/]+)\/?$/)?.[1];

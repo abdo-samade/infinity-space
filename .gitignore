@@ -1,5 +1,6 @@
 data/*
 !data/.gitkeep
+!data/team.js
 !data/activities/
 data/activities/*
 !data/activities/*.js

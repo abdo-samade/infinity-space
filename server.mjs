@@ -4,6 +4,8 @@ import {DatabaseSync} from 'node:sqlite';
 import {randomBytes, timingSafeEqual} from 'node:crypto';
 import path from 'node:path';
 import {createActivityStore} from './activity-store.mjs';
+import {createTeamStore} from './team-store.mjs';
+import {validateTeamMembers} from './public/team-schema.js';
 import {normalizeActivity,legacyActivity} from './public/activity-schema.js';
 import {migrateForm, migrateMembers, validateAnswers, validateDefinition, closedReason, sectionPath, errorMessage, activeLogo, safeNavigation, safeImage} from './public/forms-core.js';
 
@@ -18,8 +20,8 @@ db.exec(`PRAGMA journal_mode=WAL; CREATE TABLE IF NOT EXISTS content (id TEXT PR
  CREATE INDEX IF NOT EXISTS response_form ON responses(form); CREATE INDEX IF NOT EXISTS visit_created ON visits(created);`);
 if (!db.prepare('PRAGMA table_info(responses)').all().some(c=>c.name==='snapshot')) db.exec('ALTER TABLE responses ADD COLUMN snapshot TEXT');
 const initial = {forms:[], announcements:[], members:[], activities:[],team:{},logo:'',darkLogo:'',facultyLogo:'', temporaryLogo:'', logoUntil:'', revision:0};
-let activityStore;
-function getSite(){const stored=db.prepare('SELECT value FROM content WHERE id=?').get('site');const site={...initial,...(stored?JSON.parse(stored.value):{}),...(activityStore?.snapshot()||{})};site.forms=site.forms.map(migrateForm);site.members=migrateMembers(site.members);for(const [key,name] of [['logo','logo-club.png'],['darkLogo','logo-club-dark.png'],['facultyLogo','logo-fsbm.png']])if(existsSync(path.resolve('public/assets',name)))site[key]='/assets/'+name;return site;}
+let activityStore,teamStore;
+function getSite(){const stored=db.prepare('SELECT value FROM content WHERE id=?').get('site');const site={...initial,...(stored?JSON.parse(stored.value):{}),...(activityStore?.snapshot()||{}),...(teamStore?.snapshot()||{})};site.forms=site.forms.map(migrateForm);site.members=migrateMembers(site.members);for(const [key,name] of [['logo','logo-club.png'],['darkLogo','logo-club-dark.png'],['facultyLogo','logo-fsbm.png']])if(existsSync(path.resolve('public/assets',name)))site[key]='/assets/'+name;return site;}
 // Preserve historical labels before the first edit after upgrading the application.
 for (const row of db.prepare('SELECT id,form FROM responses WHERE snapshot IS NULL').all()) {
  const form=getSite().forms.find(f=>f.id===row.form);db.prepare('UPDATE responses SET snapshot=? WHERE id=?').run(JSON.stringify(form || {title:'Formulaire archivé',questions:[],sections:[]}),row.id);
@@ -48,7 +50,7 @@ function stats(){
 const mime={'.css':'text/css','.js':'text/javascript','.svg':'image/svg+xml','.png':'image/png','.jpg':'image/jpeg','.jpeg':'image/jpeg','.webp':'image/webp','.woff2':'font/woff2','.html':'text/html; charset=utf-8'};
 function serve(res,file,origin=''){if(!existsSync(file)||!statSync(file).isFile()){res.writeHead(404);return res.end('Not found');}res.setHeader('Content-Type',mime[path.extname(file)]||'application/octet-stream');let content=readFileSync(file);if(origin&&path.extname(file)==='.html')content=content.toString().replace('content="/assets/social.png"',`content="${origin}/assets/social.png"`);res.end(content);}
 export function createServer(admin=false){return http.createServer(async(req,res)=>{try{
- if(!activityStore)return json(res,503,{error:'Démarrage en cours.'});
+ if(!activityStore||!teamStore)return json(res,503,{error:'Démarrage en cours.'});
  const url=new URL(req.url,'http://localhost'), p=url.pathname;
  res.setHeader('X-Content-Type-Options','nosniff');res.setHeader('Referrer-Policy','same-origin');res.setHeader('X-Frame-Options','SAMEORIGIN');
  res.setHeader('Content-Security-Policy',"default-src 'self'; img-src 'self' data: blob: https:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self'; base-uri 'self'; form-action 'self'; object-src 'none'; frame-ancestors 'self'");
@@ -63,12 +65,13 @@ export function createServer(admin=false){return http.createServer(async(req,res
  if(admin&&p.startsWith('/api/')&&!authorized(req))return json(res,401,{error:'Connexion requise.'});
  if(p==='/api/logout'&&admin&&req.method==='POST'){sessions.delete(token(req));res.setHeader('Set-Cookie','session=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0');return json(res,200,{ok:true});}
  if(p==='/api/site'&&req.method==='GET'){
-  const site=getSite();if(!admin){site.forms=site.forms.filter(f=>f.published).map(f=>({...f,responseCount:formCount(f.id),closed:closedReason(f,formCount(f.id))}));delete site.revision;delete site.activityRevision;}
+  const site=getSite();if(!admin){site.forms=site.forms.filter(f=>f.published).map(f=>({...f,responseCount:formCount(f.id),closed:closedReason(f,formCount(f.id))}));delete site.revision;delete site.activityRevision;delete site.teamRevision;}
   return json(res,200,site);
  }
  if(p==='/api/site'&&admin&&req.method==='PUT'){
   const b=await body(req),old=getSite();for(const key of ['forms','announcements','members'])if(!Array.isArray(b[key]))throw Error('Contenu invalide.');
   b.activities ??= old.activities;b.team ??= old.team;
+  if(b.teamRevision&&b.teamRevision!==old.teamRevision)return json(res,409,{error:'Le fichier du bureau a changé. Rechargez avant de sauvegarder.'});
   if(b.activityRevision&&b.activityRevision!==old.activityRevision)return json(res,409,{error:'Les fichiers des activités ont changé. Rechargez avant de sauvegarder.'});
   if(!Array.isArray(b.activities)||b.activities.length>500)throw Error('Liste d’activités invalide (500 maximum).');
   for(const a of b.activities)for(const m of a.media||[]){if(m.height!=null&&(m.height<160||m.height>480)||m.width!=null&&(m.width<50||m.width>100))throw Error('Dimensions de photo invalides.');}
@@ -77,18 +80,16 @@ export function createServer(admin=false){return http.createServer(async(req,res
   if(new Set(b.activities.map(a=>a.id)).size!==b.activities.length)throw Error('Identifiants d’activités dupliqués.');
   if(b.revision!==undefined&&b.revision!==old.revision)return json(res,409,{error:'Le contenu a changé dans un autre onglet. Rechargez avant de sauvegarder.'});
   b.forms=b.forms.map(f=>validateDefinition(migrateForm(f),!!f.published));
-  b.members=migrateMembers(b.members);
-  if(b.members.filter(m=>m.isPresident).length>1)throw Error('Un seul membre peut être président du club.');
-  for(const m of b.members){if(!m.firstName?.trim()||!Number.isFinite(m.displayOrder)||!Number.isFinite(m.groupOrder))throw Error('Nom ou ordre du membre invalide.');for(const key of ['instagram','linkedin'])if(m[key]&&!/^https:\/\/[^\s<>"']+$/i.test(m[key]))throw Error('Les liens des membres doivent commencer par https://.');}
+  b.members=validateTeamMembers(b.members);
   for(const key of ['instagram','facebook','map'])if(b.footer?.[key]&&!/^https:\/\/[^\s<>"']+$/i.test(b.footer[key]))throw Error('Lien du pied de page invalide : '+key);
   if(b.footer?.email&&!/^[^\s@<>]+@[^\s@<>]+\.[^\s@<>]+$/.test(b.footer.email))throw Error('Adresse e-mail invalide.');
   if(b.footer?.whatsapp&&!/^\+?\d{7,15}$/.test(b.footer.whatsapp))throw Error('Numéro WhatsApp : chiffres avec indicatif international.');
   if(b.footer?.links&&(!Array.isArray(b.footer.links)||b.footer.links.length>12||b.footer.links.some(link=>!link.label?.trim()||!safeNavigation(link.url))))throw Error('Renseignez le libellé et la destination de chaque lien (12 maximum).');
   if(new Set(b.forms.map(f=>f.id)).size!==b.forms.length)throw Error('Formulaires dupliqués.');
   for(const f of old.forms)db.prepare('UPDATE responses SET snapshot=? WHERE form=? AND snapshot IS NULL').run(JSON.stringify(f),f.id);
-  b.revision=old.revision+1;let restore;
-  try{restore=activityStore.save(b.activities);db.prepare('INSERT OR REPLACE INTO content VALUES (?,?)').run('site',JSON.stringify(b));}catch(error){restore?.();throw error;}
-  return json(res,200,{ok:true,revision:b.revision,activityRevision:activityStore.snapshot().activityRevision});
+  b.revision=old.revision+1;let restore,restoreTeam;
+  try{restore=activityStore.save(b.activities);restoreTeam=teamStore.save(b.members);db.prepare('INSERT OR REPLACE INTO content VALUES (?,?)').run('site',JSON.stringify(b));}catch(error){restoreTeam?.();restore?.();throw error;}
+  return json(res,200,{ok:true,revision:b.revision,activityRevision:activityStore.snapshot().activityRevision,teamRevision:teamStore.snapshot().teamRevision});
  }
  if(p==='/api/drafts'&&admin&&req.method==='GET')return json(res,200,db.prepare('SELECT * FROM drafts ORDER BY updated DESC').all().map(r=>({id:r.id,updated:r.updated,value:JSON.parse(r.value)})));
  if(p.startsWith('/api/drafts/')&&admin){const id=p.split('/').pop();if(req.method==='PUT'){const f=migrateForm(await body(req));if(f.id!==id)throw Error('Identifiant invalide.');validateDefinition(f,false);db.prepare('INSERT OR REPLACE INTO drafts VALUES (?,?,?)').run(id,JSON.stringify(f),new Date().toISOString());return json(res,200,{ok:true});}if(req.method==='DELETE'){db.prepare('DELETE FROM drafts WHERE id=?').run(id);return json(res,200,{ok:true});}}
@@ -145,5 +146,6 @@ try{
  await Promise.all([listen(publicServer,process.env.PORT||3000),listen(adminServer,process.env.ADMIN_PORT||3001)]);
  const savedContent=db.prepare('SELECT value FROM content WHERE id=?').get('site');
  activityStore=createActivityStore(process.env.ACTIVITIES_DIR||path.join(dataDir,'activities'),savedContent?JSON.parse(savedContent.value).activities||[]:[]);
+ teamStore=createTeamStore(process.env.TEAM_FILE||path.join(dataDir,'team.js'),savedContent?JSON.parse(savedContent.value).members||[]:[]);
  console.log('Public site listening on port '+(process.env.PORT||3000));console.log('Separate admin application listening on port '+(process.env.ADMIN_PORT||3001));
 }catch(error){publicServer.close();adminServer.close();console.error(error.code==='EADDRINUSE'?'Port déjà utilisé. Arrêtez le serveur précédent avant de relancer npm start.':error.message);process.exitCode=1;}
