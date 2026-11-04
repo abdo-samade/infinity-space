@@ -8,6 +8,7 @@ import {spawn} from 'node:child_process';
 import {migrateForm, migrateMembers, orderedMembers, memberName, validateAnswers, validateQuestion, validateDefinition, sectionPath, closedReason, activeLogo} from './public/forms-core.js';
 import {homeTeam, teamPage} from './public/team-view.js';
 import {footerView} from './public/footer-view.js';
+import {activitiesPage,activityMedia} from './public/activities-view.js';
 
 const q=(id,type,extra={})=>({id,label:id,type,required:true,...extra});
 const options=['A','B'];
@@ -18,6 +19,7 @@ const request=async(route,method='GET',data,privateApp=false)=>{const r=await fe
 async function save(forms){const r=await request('site','PUT',{...site,forms},true);assert.equal(r.status,200,JSON.stringify(r.body));site=(await request('site','GET',undefined,true)).body;return site;}
 before(async()=>{
  for(const name of ['server.mjs','public','admin'])cpSync(new URL('./'+name,import.meta.url),path.join(dir,name),{recursive:true});
+ for(const name of ['logo-club.png','logo-fsbm.png','logo-club-dark.png'])rmSync(path.join(dir,'public/assets',name),{force:true});
  mkdirSync(path.join(dir,'data'));const db=new DatabaseSync(path.join(dir,'data/club.sqlite'));
  db.exec('CREATE TABLE content (id TEXT PRIMARY KEY,value TEXT);CREATE TABLE responses (id INTEGER PRIMARY KEY,form TEXT,created TEXT,value TEXT);');
  db.prepare('INSERT INTO content VALUES (?,?)').run('site',JSON.stringify({forms:[legacy],announcements:[],members:[]}));
@@ -83,10 +85,10 @@ test('published and expired logo fallback and visit analytics',async()=>{
  const draft={id:'hidden',title:'Hidden',published:false,questions:[]};await save([...site.forms,draft]);assert.ok(!(await request('site')).body.forms.some(f=>f.id==='hidden'));
  await request('visit','POST',{page:'/forms/legacy'});const s=(await request('stats','GET',undefined,true)).body;assert.equal(s.formVisits.find(v=>v.page==='/forms/legacy').count,1);assert.equal(s.visits.reduce((a,b)=>a+b.count,0),1);
 });
-test('team migration, unique president, ordering, homepage cap and grouped full page',async()=>{
+test('team migration, unique president, ordering, homepage cap and equal member rows',async()=>{
  const old=migrateMembers([{name:'Amal El Fassi',role:'Présidente'}])[0];assert.equal(old.firstName,'Amal');assert.equal(old.lastName,'El Fassi');assert.equal(memberName(old),'Amal El Fassi');
  const members=Array.from({length:11},(_,i)=>({id:'member-'+i,firstName:'Membre',lastName:String(i),displayOrder:i,isPresident:i===10,group:i<5?'Commissions':'Organisation',groupAr:i<5?'اللجان':'التنظيم',groupOrder:i<5?1:2}));
- assert.equal(orderedMembers(members)[0].id,'member-10');assert.equal((homeTeam(members).match(/class="bureau-card"/g)||[]).length,8);assert.equal((teamPage(members).match(/class="bureau-card"/g)||[]).length,10);assert.match(teamPage(members,'ar'),/اللجان/);assert.match(teamPage(members),/president-feature/);
+ assert.equal(orderedMembers(members)[0].id,'member-10');assert.equal((homeTeam(members).match(/class="bureau-card"/g)||[]).length,8);assert.equal((teamPage(members).match(/class="team-profile"/g)||[]).length,11);assert.match(teamPage(members,'ar'),/اللجان/);assert.ok(!teamPage(members).includes('president-feature'));
  const invalid=await request('site','PUT',{...site,members:members.map((m,i)=>({...m,isPresident:i>8}))},true);assert.equal(invalid.status,400);assert.match(invalid.body.error,/seul/);
  const valid=await request('site','PUT',{...site,members},true);assert.equal(valid.status,200);site=(await request('site','GET',undefined,true)).body;
  const direct=await fetch(pub+'/team');assert.equal(direct.status,200);assert.match(await direct.text(),/team-footer.css/);
@@ -108,4 +110,35 @@ test('official repository logos are detected without changing content or restart
  const after=(await request('site')).body;assert.equal(after.logo,'/assets/logo-club.png');assert.equal(after.facultyLogo,'/assets/logo-fsbm.png');
  const favicon=await fetch(pub+'/brand-logo');assert.equal(favicon.headers.get('content-type'),'image/png');assert.deepEqual(Buffer.from(await favicon.arrayBuffer()),bytes);
  assert.equal((await fetch(admin+'/assets/logo-club.png')).status,200);
+});
+let publicImage;
+test('admin image upload accepts images over 1 MiB, is authenticated and validates types',async()=>{
+ const png=Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=','base64');
+ const bytes=Buffer.concat([png,Buffer.alloc(2*1024*1024)]),file={name:'large-header.png',type:'image/png',size:bytes.length,data:bytes.toString('base64')};
+ assert.equal((await fetch(admin+'/api/media',{method:'POST',body:JSON.stringify(file)})).status,401);
+ assert.equal((await request('media','POST',file)).status,404);
+ const result=await request('media','POST',file,true);assert.equal(result.status,201);assert.match(result.body.url,/^\/media\/[a-f0-9]{32}\.png$/);publicImage=result.body.url;
+ const image=await fetch(pub+publicImage);assert.equal(image.status,200);assert.equal(image.headers.get('content-type'),'image/png');assert.equal((await image.arrayBuffer()).byteLength,bytes.length);
+ assert.equal((await fetch(admin+publicImage)).status,200);
+ assert.equal((await request('media','POST',{...file,size:10*1024*1024+1,data:'aGVsbG8='},true)).status,400);
+ assert.equal((await request('media','POST',{name:'fake.png',type:'image/png',size:5,data:'aGVsbG8='},true)).status,400);
+});
+test('four archive cells, alternating photo captions, size controls and direct routes',async()=>{
+ const activity={id:'solidarite',cell:'charity',title:'Une initiative solidaire',titleAr:'مبادرة تضامنية',date:'2026-11-04',description:'Ensemble.',descriptionAr:'معاً.',media:[{image:publicImage,caption:'Premier moment',captionAr:'اللحظة الأولى',format:'square',height:302,width:80},{image:publicImage,caption:'Deuxième moment',captionAr:'اللحظة الثانية',format:'landscape',height:250,width:100}]};
+ const r=await request('site','PUT',{...site,activities:[activity]},true);assert.equal(r.status,200);site=(await request('site','GET',undefined,true)).body;
+ const overview=activitiesPage(site,'fr');assert.equal((overview.match(/class="cell-card /g)||[]).length,4);
+ assert.match(activitiesPage(site,'ar','charity'),/مبادرة تضامنية/);assert.ok(!activitiesPage(site,'fr','sport').includes('Une initiative solidaire'));
+ const story=activityMedia(activity.media);assert.match(story,/activity-moment reverse/);assert.match(story,/--media-height:302px/);assert.match(story,/--media-width:80%/);
+ for(const route of ['/activities','/activities/sport','/activities/esport','/activities/formations','/activities/charity'])assert.equal((await fetch(pub+route)).status,200);
+ const invalid={...activity,cell:'unknown'};assert.equal((await request('site','PUT',{...site,activities:[invalid]},true)).status,400);
+ assert.equal((await request('site','PUT',{...site,activities:[{...activity,media:[{...activity.media[0],height:900}]}]},true)).status,400);
+});
+test('dark logo, selected-language faculty text and team photo preserve existing data',async()=>{
+ const next={...site,darkLogo:publicImage,team:{image:publicImage,year:'2026–2027',intro:'Tous égaux.',introAr:'الجميع متساوون.',rotation:'Les rôles tournent.',rotationAr:'نتداول الأدوار.'}};
+ assert.equal((await request('site','PUT',next,true)).status,200);site=(await request('site','GET',undefined,true)).body;
+ assert.equal(activeLogo(site,Date.now(),true),publicImage);assert.equal(activeLogo(site),'/assets/logo-club.png');
+ const fr=footerView(site,'fr'),ar=footerView(site,'ar');assert.ok(!fr.includes('<span lang="ar"'));assert.ok(!ar.includes('<strong>Faculté des Sciences'));
+ const team=teamPage(site.members,'ar',site);assert.match(team,/الجميع متساوون/);assert.match(team,/نتداول الأدوار/);assert.match(team,/team-group-photo/);assert.match(team,/2026–2027/);
+ const oldClient={forms:site.forms,announcements:site.announcements,members:site.members,revision:site.revision};assert.equal((await request('site','PUT',oldClient,true)).status,200);
+ site=(await request('site','GET',undefined,true)).body;assert.equal(site.activities.length,1);assert.equal(site.team.year,'2026–2027');
 });

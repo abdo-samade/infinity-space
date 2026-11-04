@@ -8,9 +8,9 @@ export const FILE_TYPES = ['image/png', 'image/jpeg', 'image/webp', 'application
 export const MAX_FILE_BYTES = 2 * 1024 * 1024;
 export const escapeHTML = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;'}[c]));
 export const localized = (object, key, lang = 'fr') => object?.[key + (lang === 'ar' ? 'Ar' : '')] || object?.[key] || '';
-export const safeImage = source => typeof source === 'string' && (/^data:image\/(png|jpeg|webp);base64,[A-Za-z0-9+/=]+$/.test(source) || /^https:\/\//.test(source) || /^\/assets\/[a-zA-Z0-9_.-]+$/.test(source)) ? source : '';
-export const activeLogo = (site, now = Date.now()) => safeImage(site.temporaryLogo) && Date.parse(site.logoUntil) > now ? site.temporaryLogo : safeImage(site.logo);
-export const memberName = member => [member.firstName,member.lastName].filter(Boolean).join(' ') || member.name || '';
+export const safeImage = source => typeof source === 'string' && (/^data:image\/(png|jpeg|webp);base64,[A-Za-z0-9+/=]+$/.test(source) || /^https:\/\//.test(source) || /^\/assets\/[a-zA-Z0-9_.-]+$/.test(source) || /^\/media\/[a-f0-9]{32}\.(png|jpg|webp)$/.test(source)) ? source : '';
+export const activeLogo = (site, now = Date.now(), dark = false) => safeImage(site.temporaryLogo) && Date.parse(site.logoUntil) > now ? site.temporaryLogo : dark && safeImage(site.darkLogo) ? site.darkLogo : safeImage(site.logo);
+export const memberName = (member,lang='fr') => [lang==='ar'&&member.firstNameAr||member.firstName,lang==='ar'&&member.lastNameAr||member.lastName].filter(Boolean).join(' ') || member.name || '';
 export function migrateMembers(members=[]){return members.map((m,i)=>{const parts=String(m.name||'').trim().split(/\s+/);return {...m,id:m.id||`member-${i}`,firstName:m.firstName??parts.shift()??'',lastName:m.lastName??parts.join(' '),displayOrder:Number(m.displayOrder??i),groupOrder:Number(m.groupOrder||0),isPresident:!!m.isPresident};});}
 export const orderedMembers = members => migrateMembers(members).sort((a,b)=>Number(b.isPresident)-Number(a.isPresident)||a.displayOrder-b.displayOrder);
 export const safeLink = value => typeof value==='string'&&/^https:\/\//i.test(value)&&!/[\s<>"']/.test(value)?value:'';

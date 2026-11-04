@@ -3,10 +3,11 @@ import {readFileSync, existsSync, mkdirSync, writeFileSync, unlinkSync, statSync
 import {DatabaseSync} from 'node:sqlite';
 import {randomBytes, timingSafeEqual} from 'node:crypto';
 import path from 'node:path';
-import {migrateForm, migrateMembers, validateAnswers, validateDefinition, closedReason, sectionPath, errorMessage, activeLogo, safeNavigation} from './public/forms-core.js';
+import {migrateForm, migrateMembers, validateAnswers, validateDefinition, closedReason, sectionPath, errorMessage, activeLogo, safeNavigation, safeImage} from './public/forms-core.js';
 
 const dataDir = path.resolve(process.env.DATA_DIR || 'data');
 mkdirSync(path.join(dataDir,'uploads'),{recursive:true});
+mkdirSync(path.join(dataDir,'media'),{recursive:true});
 const db = new DatabaseSync(path.join(dataDir,'club.sqlite'));
 db.exec(`PRAGMA journal_mode=WAL; CREATE TABLE IF NOT EXISTS content (id TEXT PRIMARY KEY, value TEXT);
  CREATE TABLE IF NOT EXISTS responses (id INTEGER PRIMARY KEY, form TEXT, created TEXT, value TEXT);
@@ -14,8 +15,8 @@ db.exec(`PRAGMA journal_mode=WAL; CREATE TABLE IF NOT EXISTS content (id TEXT PR
  CREATE TABLE IF NOT EXISTS drafts (id TEXT PRIMARY KEY, value TEXT, updated TEXT);
  CREATE INDEX IF NOT EXISTS response_form ON responses(form); CREATE INDEX IF NOT EXISTS visit_created ON visits(created);`);
 if (!db.prepare('PRAGMA table_info(responses)').all().some(c=>c.name==='snapshot')) db.exec('ALTER TABLE responses ADD COLUMN snapshot TEXT');
-const initial = {forms:[], announcements:[], members:[], logo:'', facultyLogo:'', temporaryLogo:'', logoUntil:'', revision:0};
-function getSite(){const stored=db.prepare('SELECT value FROM content WHERE id=?').get('site');const site={...initial,...(stored?JSON.parse(stored.value):{})};site.forms=site.forms.map(migrateForm);site.members=migrateMembers(site.members);for(const [key,name] of [['logo','logo-club.png'],['facultyLogo','logo-fsbm.png']])if(existsSync(path.resolve('public/assets',name)))site[key]='/assets/'+name;return site;}
+const initial = {forms:[], announcements:[], members:[], activities:[],team:{},logo:'',darkLogo:'',facultyLogo:'', temporaryLogo:'', logoUntil:'', revision:0};
+function getSite(){const stored=db.prepare('SELECT value FROM content WHERE id=?').get('site');const site={...initial,...(stored?JSON.parse(stored.value):{})};site.forms=site.forms.map(migrateForm);site.members=migrateMembers(site.members);for(const [key,name] of [['logo','logo-club.png'],['darkLogo','logo-club-dark.png'],['facultyLogo','logo-fsbm.png']])if(existsSync(path.resolve('public/assets',name)))site[key]='/assets/'+name;return site;}
 // Preserve historical labels before the first edit after upgrading the application.
 for (const row of db.prepare('SELECT id,form FROM responses WHERE snapshot IS NULL').all()) {
  const form=getSite().forms.find(f=>f.id===row.form);db.prepare('UPDATE responses SET snapshot=? WHERE id=?').run(JSON.stringify(form || {title:'Formulaire archivé',questions:[],sections:[]}),row.id);
@@ -41,7 +42,7 @@ function stats(){
  responses:db.prepare('SELECT * FROM responses ORDER BY id DESC').all().map(r=>({...r,value:JSON.parse(r.value),snapshot:JSON.parse(r.snapshot||'{}')})),
  formVisits:db.prepare("SELECT page,count(*) count FROM visits WHERE page LIKE '/forms/%' GROUP BY page").all()};
 }
-const mime={'.css':'text/css','.js':'text/javascript','.svg':'image/svg+xml','.png':'image/png','.webp':'image/webp','.woff2':'font/woff2','.html':'text/html; charset=utf-8'};
+const mime={'.css':'text/css','.js':'text/javascript','.svg':'image/svg+xml','.png':'image/png','.jpg':'image/jpeg','.jpeg':'image/jpeg','.webp':'image/webp','.woff2':'font/woff2','.html':'text/html; charset=utf-8'};
 function serve(res,file,origin=''){if(!existsSync(file)||!statSync(file).isFile()){res.writeHead(404);return res.end('Not found');}res.setHeader('Content-Type',mime[path.extname(file)]||'application/octet-stream');let content=readFileSync(file);if(origin&&path.extname(file)==='.html')content=content.toString().replace('content="/assets/social.png"',`content="${origin}/assets/social.png"`);res.end(content);}
 export function createServer(admin=false){return http.createServer(async(req,res)=>{try{
  const url=new URL(req.url,'http://localhost'), p=url.pathname;
@@ -63,6 +64,10 @@ export function createServer(admin=false){return http.createServer(async(req,res
  }
  if(p==='/api/site'&&admin&&req.method==='PUT'){
   const b=await body(req),old=getSite();for(const key of ['forms','announcements','members'])if(!Array.isArray(b[key]))throw Error('Contenu invalide.');
+  b.activities ??= old.activities;b.team ??= old.team;
+  if(!Array.isArray(b.activities)||b.activities.length>500)throw Error('Liste d’activités invalide (500 maximum).');
+  for(const a of b.activities){if(!/^[\w-]{1,100}$/.test(a.id)||!['sport','esport','formations','charity'].includes(a.cell)||!a.title?.trim()||!Array.isArray(a.media)||a.media.length<1||a.media.length>30)throw Error('Activité invalide : titre, cellule et photos requis (30 maximum).');if(a.date&&(!/^\d{4}-\d{2}-\d{2}$/.test(a.date)||!Number.isFinite(Date.parse(a.date))||new Date(a.date).toISOString().slice(0,10)!==a.date))throw Error('Date de l’activité invalide.');for(const m of a.media){if(!safeImage(m.image))throw Error('Image d’activité invalide.');if(m.width!=null&&(!Number.isFinite(Number(m.width))||m.width<50||m.width>100)||m.height!=null&&(!Number.isFinite(Number(m.height))||m.height<160||m.height>480)||m.format&&!['square','portrait','landscape','wide','original'].includes(m.format))throw Error('Dimensions de photo invalides.');}}
+  if(new Set(b.activities.map(a=>a.id)).size!==b.activities.length)throw Error('Identifiants d’activités dupliqués.');
   if(b.revision!==undefined&&b.revision!==old.revision)return json(res,409,{error:'Le contenu a changé dans un autre onglet. Rechargez avant de sauvegarder.'});
   b.forms=b.forms.map(f=>validateDefinition(migrateForm(f),!!f.published));
   b.members=migrateMembers(b.members);
@@ -79,6 +84,10 @@ export function createServer(admin=false){return http.createServer(async(req,res
  if(p==='/api/drafts'&&admin&&req.method==='GET')return json(res,200,db.prepare('SELECT * FROM drafts ORDER BY updated DESC').all().map(r=>({id:r.id,updated:r.updated,value:JSON.parse(r.value)})));
  if(p.startsWith('/api/drafts/')&&admin){const id=p.split('/').pop();if(req.method==='PUT'){const f=migrateForm(await body(req));if(f.id!==id)throw Error('Identifiant invalide.');validateDefinition(f,false);db.prepare('INSERT OR REPLACE INTO drafts VALUES (?,?,?)').run(id,JSON.stringify(f),new Date().toISOString());return json(res,200,{ok:true});}if(req.method==='DELETE'){db.prepare('DELETE FROM drafts WHERE id=?').run(id);return json(res,200,{ok:true});}}
  if(p==='/api/stats'&&admin&&req.method==='GET')return json(res,200,stats());
+ if(p==='/api/media'&&admin&&req.method==='POST'){
+  const file=await body(req);if(!['image/png','image/jpeg','image/webp'].includes(file.type)||!Number.isInteger(file.size)||file.size<1||file.size>10*1024*1024)throw Error('Image : PNG, JPEG ou WebP, 10 Mo maximum.');
+  const buffer=fileBuffer(file),id=randomBytes(16).toString('hex')+'.'+fileExt[file.type];writeFileSync(path.join(dataDir,'media',id),buffer,{flag:'wx',mode:0o600});return json(res,201,{url:'/media/'+id,size:buffer.length});
+ }
  if(/^\/api\/responses\/\d+$/.test(p)&&admin&&req.method==='DELETE'){
   const id=Number(p.split('/').pop()),row=db.prepare('SELECT value FROM responses WHERE id=?').get(id);
   if(!row)return json(res,404,{error:'Réponse introuvable.'});
@@ -112,7 +121,8 @@ export function createServer(admin=false){return http.createServer(async(req,res
   }catch(err){db.exec('ROLLBACK');for(const name of written)try{unlinkSync(path.join(dataDir,'uploads',name));}catch{}throw err;}
  }
  if(p.startsWith('/api/'))return json(res,404,{error:'Not found'});
- if(p==='/brand-logo'){const logo=activeLogo(getSite());const match=logo.match(/^data:(image\/(?:png|jpeg|webp));base64,(.+)$/);if(match){res.setHeader('Content-Type',match[1]);return res.end(Buffer.from(match[2],'base64'));}if(logo.startsWith('/assets/'))return serve(res,path.resolve('public','.'+logo));res.writeHead(204);return res.end();}
+ if(p.startsWith('/media/')){const id=p.slice(7);if(!/^[a-f0-9]{32}\.(png|jpg|webp)$/.test(id))return json(res,404,{error:'Image introuvable.'});return serve(res,path.join(dataDir,'media',id));}
+ if(p==='/brand-logo'){const logo=activeLogo(getSite());const match=logo.match(/^data:(image\/(?:png|jpeg|webp));base64,(.+)$/);if(match){res.setHeader('Content-Type',match[1]);return res.end(Buffer.from(match[2],'base64'));}if(logo.startsWith('/media/'))return serve(res,path.join(dataDir,'media',logo.slice(7)));if(logo.startsWith('/assets/'))return serve(res,path.resolve('public','.'+logo));res.writeHead(204);return res.end();}
  const shared=p.startsWith('/shared/'),root=path.resolve(shared||p.startsWith('/assets/')?'public':admin?'admin':'public');
  let requested=shared?p.slice(7):p;
  if(requested==='/'||(!path.extname(requested)&&!shared))requested='/index.html';

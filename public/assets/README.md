@@ -4,6 +4,7 @@ Déposer les vrais fichiers PNG avec exactement ces noms :
 
 - `logo-club.png` : logo officiel Infinity Space.
 - `logo-fsbm.png` : logo officiel de la faculté.
+- `logo-club-dark.png` (optionnel) : version du logo à utiliser sur les fonds sombres. La nouvelle variante peut aussi être chargée dans **Identité → Logo pour les fonds sombres**.
 
 GitHub → dossier `public/assets` → **Add file → Upload files** → déposer les deux images → **Commit changes** sur `main`.
 
