@@ -1,4 +1,5 @@
 // Shared, dependency-free form contract. Imported by Node and both applications.
+import {contentText,scriptText} from './i18n.js';
 export const TYPES = {
   short: 'Réponse courte', long: 'Paragraphe', choice: 'Choix multiple',
   checkboxes: 'Cases à cocher', dropdown: 'Liste déroulante', scale: 'Échelle linéaire',
@@ -7,10 +8,10 @@ export const TYPES = {
 export const FILE_TYPES = ['image/png', 'image/jpeg', 'image/webp', 'application/pdf', 'text/plain'];
 export const MAX_FILE_BYTES = 2 * 1024 * 1024;
 export const escapeHTML = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;'}[c]));
-export const localized = (object, key, lang = 'fr') => object?.[key + (lang === 'ar' ? 'Ar' : '')] || object?.[key] || '';
-export const safeImage = source => typeof source === 'string' && (/^data:image\/(png|jpeg|webp);base64,[A-Za-z0-9+/=]+$/.test(source) || /^https:\/\//.test(source) || /^\/assets\/[a-zA-Z0-9_.-]+$/.test(source) || /^\/media\/[a-f0-9]{32}\.(png|jpg|webp)$/.test(source)) ? source : '';
+export const localized = contentText;
+export const safeImage = source => typeof source === 'string' && (/^data:image\/(png|jpeg|webp);base64,[A-Za-z0-9+/=]+$/.test(source) || /^https:\/\//.test(source) || (/^\/(assets|img)\/[a-zA-Z0-9_./-]+$/.test(source)&&!source.split('/').includes('..')) || /^\/media\/[a-f0-9]{32}\.(png|jpg|webp)$/.test(source)) ? source : '';
 export const activeLogo = (site, now = Date.now(), dark = false) => safeImage(site.temporaryLogo) && Date.parse(site.logoUntil) > now ? site.temporaryLogo : dark && safeImage(site.darkLogo) ? site.darkLogo : safeImage(site.logo);
-export const memberName = (member,lang='fr') => [lang==='ar'&&member.firstNameAr||member.firstName,lang==='ar'&&member.lastNameAr||member.lastName].filter(Boolean).join(' ') || member.name || '';
+export const memberName = (member,lang='fr') => scriptText([lang==='ar'&&member.firstNameAr||member.firstName,lang==='ar'&&member.lastNameAr||member.lastName].filter(Boolean).join(' ') || member.name || '',lang) || (lang==='ar'?'عضو المكتب':'Membre du bureau');
 export function migrateMembers(members=[]){return members.map((m,i)=>{const parts=String(m.name||'').trim().split(/\s+/);return {...m,id:m.id||`member-${i}`,firstName:m.firstName??parts.shift()??'',lastName:m.lastName??parts.join(' '),displayOrder:Number(m.displayOrder??i),groupOrder:Number(m.groupOrder||0),isPresident:!!m.isPresident};});}
 export const orderedMembers = members => migrateMembers(members).sort((a,b)=>Number(b.isPresident)-Number(a.isPresident)||a.displayOrder-b.displayOrder);
 export const safeLink = value => typeof value==='string'&&/^https:\/\//i.test(value)&&!/[\s<>"']/.test(value)?value:'';
@@ -147,10 +148,12 @@ export function validateDefinition(form, strict = true) {
 }
 export function displayAnswer(q, value, lang='fr') {
   if (value == null || value==='') return '—';
-  const option = id => id?.startsWith?.('__other__:') ? id.slice(10) : localized((q.options || []).find(o=>o.id===id), 'label', lang) || String(id);
+  // Administrative exports preserve authored labels and answers in either script.
+  const label = object => object?.[lang==='ar'?'labelAr':'label'] || object?.label || object?.labelAr || '';
+  const option = id => id?.startsWith?.('__other__:') ? id.slice(10) : label((q.options || []).find(o=>o.id===id)) || String(id);
   if (['choice','dropdown'].includes(q.type)) return option(value);
   if (q.type==='checkboxes') return value.map(option).join(', ');
-  if (['grid','checkboxGrid'].includes(q.type)) return Object.entries(value).map(([id,v])=>`${localized(q.rows.find(r=>r.id===id),'label',lang) || id}: ${(Array.isArray(v)?v:[v]).map(c=>localized(q.columns.find(col=>col.id===c),'label',lang)||c).join(', ')}`).join(' / ');
+  if (['grid','checkboxGrid'].includes(q.type)) return Object.entries(value).map(([id,v])=>`${label(q.rows.find(r=>r.id===id)) || id}: ${(Array.isArray(v)?v:[v]).map(c=>label(q.columns.find(col=>col.id===c))||c).join(', ')}`).join(' / ');
   if (q.type==='file') return value.name || 'Fichier';
   return String(value);
 }

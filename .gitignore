@@ -1,3 +1,7 @@
 data/*
 !data/.gitkeep
+!data/activities/
+data/activities/*
+!data/activities/*.js
+!data/activities/README.md
 .env

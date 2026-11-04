@@ -1,5 +1,8 @@
 export const IMAGE_LIMIT=10*1024*1024;
 const pending=new Set();
+export function dataURLFile(source,name='image.webp'){
+ const [header,encoded]=source.split(','),bytes=Uint8Array.from(atob(encoded),c=>c.charCodeAt(0));return new File([bytes],name,{type:header.match(/^data:([^;]+)/)?.[1]||'image/webp'});
+}
 export const waitForUploads=()=>Promise.all([...pending]);
 export function uploadImage(file){
  const work=(async()=>{
