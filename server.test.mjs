@@ -1,26 +1,103 @@
-import {test} from 'node:test';
+import {test, before, after} from 'node:test';
 import assert from 'node:assert/strict';
-import {mkdtempSync,copyFileSync,mkdirSync,rmSync} from 'node:fs';
+import {mkdtempSync, cpSync, rmSync, mkdirSync, readdirSync} from 'node:fs';
 import {tmpdir} from 'node:os';
+import {DatabaseSync} from 'node:sqlite';
 import path from 'node:path';
 import {spawn} from 'node:child_process';
-test('separate admin, publishing, required answers and statistics',async()=>{
- const dir=mkdtempSync(path.join(tmpdir(),'infinity-test-'));copyFileSync(new URL('./server.mjs',import.meta.url),path.join(dir,'server.mjs'));
- const child=spawn(process.execPath,['server.mjs'],{cwd:dir,env:{...process.env,PORT:'19430',ADMIN_PORT:'19431',ADMIN_PASSWORD:'test-only-password'},stdio:['ignore','pipe','pipe']});
- try{await new Promise((resolve,reject)=>{let text='';const timer=setTimeout(()=>reject(Error('Startup timeout')),10000);child.stdout.on('data',c=>{text+=c;if(text.includes('Separate admin')){clearTimeout(timer);resolve();}});child.on('error',reject);child.once('exit',code=>{clearTimeout(timer);reject(Error('Server exited: '+code));});});
- const admin='http://127.0.0.1:19431',pub='http://127.0.0.1:19430';
- assert.equal((await fetch(admin+'/api/stats')).status,401);
- assert.equal((await fetch(admin+'/api/site')).status,401);
- assert.equal((await fetch(pub+'/api/login',{method:'POST'})).status,404);
- assert.equal((await fetch(admin+'/api/login',{method:'POST',body:JSON.stringify({password:'wrong'})})).status,401);
- const login=await fetch(admin+'/api/login',{method:'POST',body:JSON.stringify({password:'test-only-password'})});assert.equal(login.status,200);const cookie=login.headers.get('set-cookie').split(';')[0];
- const content={forms:[{id:'chess',title:'Chess',published:false,questions:[{id:'name',type:'short',label:'Nom',required:true}]}],announcements:[],members:[]};
- const save=()=>fetch(admin+'/api/site',{method:'PUT',headers:{cookie},body:JSON.stringify(content)});
- assert.equal((await save()).status,200);assert.equal((await (await fetch(pub+'/api/site')).json()).forms.length,0);
- content.forms[0].published=true;await save();assert.equal((await (await fetch(pub+'/api/site')).json()).forms.length,1);
- assert.equal((await fetch(pub+'/api/respond',{method:'POST',body:JSON.stringify({form:'chess',answers:{}})})).status,400);
- assert.equal((await fetch(pub+'/api/respond',{method:'POST',body:JSON.stringify({form:'chess',answers:{name:'Student'}})})).status,201);
- await fetch(pub+'/api/visit',{method:'POST',body:JSON.stringify({page:'/forms/chess'})});
- const stats=await(await fetch(admin+'/api/stats',{headers:{cookie}})).json();assert.equal(stats.responses.length,1);assert.equal(stats.responses[0].value.name,'Student');assert.equal(stats.formVisits[0].count,1);
- }finally{if(child.exitCode===null){child.kill();await new Promise(r=>child.once('close',r));}rmSync(dir,{recursive:true,force:true});}
+import {migrateForm, migrateMembers, orderedMembers, memberName, validateAnswers, validateQuestion, validateDefinition, sectionPath, closedReason, activeLogo} from './public/forms-core.js';
+import {homeTeam, teamPage} from './public/team-view.js';
+import {footerView} from './public/footer-view.js';
+
+const q=(id,type,extra={})=>({id,label:id,type,required:true,...extra});
+const options=['A','B'];
+const legacy={id:'legacy',title:'Ancien tournoi',published:true,questions:[q('nom','short'),q('avis','long',{required:false}),q('jeu','choice',{options})]};
+const dir=mkdtempSync(path.join(tmpdir(),'infinity-test-'));
+const pub='http://127.0.0.1:19430',admin='http://127.0.0.1:19431';let child,cookie,site;
+const request=async(route,method='GET',data,privateApp=false)=>{const r=await fetch((privateApp?admin:pub)+'/api/'+route,{method,headers:{'Content-Type':'application/json',...(privateApp&&cookie?{cookie}:{})},...(data!==undefined?{body:JSON.stringify(data)}:{})});return {status:r.status,body:await r.json(),headers:r.headers};};
+async function save(forms){const r=await request('site','PUT',{...site,forms},true);assert.equal(r.status,200,JSON.stringify(r.body));site=(await request('site','GET',undefined,true)).body;return site;}
+before(async()=>{
+ for(const name of ['server.mjs','public','admin'])cpSync(new URL('./'+name,import.meta.url),path.join(dir,name),{recursive:true});
+ mkdirSync(path.join(dir,'data'));const db=new DatabaseSync(path.join(dir,'data/club.sqlite'));
+ db.exec('CREATE TABLE content (id TEXT PRIMARY KEY,value TEXT);CREATE TABLE responses (id INTEGER PRIMARY KEY,form TEXT,created TEXT,value TEXT);');
+ db.prepare('INSERT INTO content VALUES (?,?)').run('site',JSON.stringify({forms:[legacy],announcements:[],members:[]}));
+ db.prepare('INSERT INTO responses VALUES (?,?,?,?)').run(1,'legacy',new Date().toISOString(),JSON.stringify({nom:'Ancien membre',jeu:'A'}));db.close();
+ child=spawn(process.execPath,['server.mjs'],{cwd:dir,env:{...process.env,DATA_DIR:path.join(dir,'data'),PORT:'19430',ADMIN_PORT:'19431',ADMIN_PASSWORD:'test-only-password'},stdio:['ignore','pipe','pipe']});
+ await new Promise((resolve,reject)=>{let output='',errors='';const timer=setTimeout(()=>reject(Error('Startup timeout '+errors)),10000);child.stderr.on('data',c=>errors+=c);child.stdout.on('data',c=>{output+=c;if(output.includes('Separate admin')){clearTimeout(timer);resolve();}});child.on('error',reject);child.once('exit',code=>{clearTimeout(timer);reject(Error('Server exited '+code+' '+errors));});});
+ const login=await request('login','POST',{password:'test-only-password'},true);assert.equal(login.status,200);cookie=login.headers.get('set-cookie').split(';')[0];site=(await request('site','GET',undefined,true)).body;
+});
+after(async()=>{if(child?.exitCode===null){child.kill();await new Promise(r=>child.once('close',r));}rmSync(dir,{recursive:true,force:true});});
+
+test('migrates legacy fields and snapshots existing responses without losing labels',async()=>{
+ const f=site.forms[0];assert.equal(f.questions[0].section,'main');assert.equal(f.questions[2].options[0].id,'A');assert.equal(f.accepting,true);
+ const r=(await request('stats','GET',undefined,true)).body.responses[0];assert.equal(r.value.jeu,'A');assert.equal(r.snapshot.questions[0].label,'nom');
+ const renamed=structuredClone(f);renamed.questions[0].label='Nouveau nom';await save([renamed]);const historical=(await request('stats','GET',undefined,true)).body.responses[0];assert.equal(historical.snapshot.questions[0].label,'nom');
+});
+test('admin is separate, authenticated, CSRF guarded; static assets have correct MIME',async()=>{
+ const r=await fetch(admin+'/api/stats');assert.equal(r.status,401);assert.equal((await request('login','POST',{})).status,404);
+ const csrf=await fetch(admin+'/api/site',{method:'PUT',headers:{cookie,Origin:'https://elsewhere.example'},body:JSON.stringify(site)});assert.equal(csrf.status,403);
+ for(const [origin,file,type] of [[pub,'/','text/html'],[pub,'/forms-core.js','text/javascript'],[admin,'/shared/form-view.js','text/javascript'],[admin,'/preview.html','text/html'],[pub,'/assets/mark.svg','image/svg+xml']]){const r=await fetch(origin+file);assert.equal(r.status,200,file);assert.ok(r.headers.get('content-type').startsWith(type));}
+});
+test('all eleven types validate on the server, files are private, snapshots persist',async()=>{
+ const form={id:'all-types',title:'Tous les types',published:true,questions:[q('short','short',{validation:{preset:'email'}}),q('long','long'),q('choice','choice',{options,other:true}),q('checks','checkboxes',{options,other:true}),q('drop','dropdown',{options}),q('scale','scale',{min:1,max:10}),q('grid','grid',{rows:['R1','R2'],columns:['C1','C2']}),q('checkgrid','checkboxGrid',{rows:['R1'],columns:['C1','C2']}),q('date','date'),q('time','time'),q('file','file',{allowedTypes:['text/plain'],maxBytes:262144})]};
+ await save([...site.forms,form]);const text=Buffer.from('Participation Infinity Space');
+ const answers={short:'student@example.com',long:'Une réponse longue.',choice:'__other__:Autre jeu',checks:['A','__other__:Dama'],drop:'B',scale:8,grid:{R1:'C1',R2:'C2'},checkgrid:{R1:['C1','C2']},date:'2026-11-04',time:'18:30',file:{name:'note.txt',type:'text/plain',size:text.length,data:text.toString('base64')}};
+ const bad={...answers,short:'no',checks:['X'],scale:11,date:'2026-02-31',time:'29:99',grid:{R1:'X'},checkgrid:{R1:['X']}};const rejected=await request('respond','POST',{form:form.id,answers:bad,lang:'ar'});assert.equal(rejected.status,422);for(const id of ['short','checks','scale','date','time','grid','checkgrid'])assert.ok(rejected.body.errors[id],id);assert.match(rejected.body.error,/[\u0600-\u06ff]/);
+ assert.equal((await request('respond','POST',{form:form.id,answers})).status,201);
+ const r=(await request('stats','GET',undefined,true)).body.responses.find(r=>r.form===form.id);assert.equal(r.snapshot.questions.length,11);assert.ok(r.value.file.fileId);assert.equal(r.value.file.data,undefined);
+ assert.equal((await fetch(pub+'/api/files/'+r.value.file.fileId)).status,404);assert.equal((await fetch(admin+'/api/files/'+r.value.file.fileId)).status,401);assert.equal((await fetch(admin+'/api/files/'+r.value.file.fileId,{headers:{cookie}})).status,200);
+ assert.equal((await request('responses/'+r.id,'DELETE',undefined,true)).status,200);assert.equal(readdirSync(path.join(dir,'data/uploads')).length,0);
+});
+test('required, allowed options, number, phone, lengths and regex are checked',()=>{
+ const f=migrateForm({id:'validation',questions:[q('x','short')]});assert.equal(validateQuestion(f.questions[0],''),'required');
+ for(const [validation,value,code] of [[{preset:'email'},'bad','email'],[{preset:'phone'},'abc','phone'],[{preset:'number',min:2,max:4},'5','number'],[{minLength:4},'abc','length'],[{maxLength:2},'abc','length'],[{regex:'^[A-Z]{2}$'},'aa','regex']])assert.equal(validateQuestion({...f.questions[0],validation},value),code);
+ assert.throws(()=>validateDefinition(migrateForm({id:'bad-regex',published:true,title:'Bad',questions:[q('x','short',{validation:{regex:'(a+)+'}})]})),/complexe/);
+ assert.equal(validateQuestion(migrateForm({questions:[q('x','checkboxes',{options})]}).questions[0],['A','A']),'option');
+});
+test('conditional routing validates only visited sections and strips skipped answers',async()=>{
+ const form={id:'branches',title:'Branches',published:true,sections:[{id:'one'},{id:'two'},{id:'three'}],questions:[q('route','choice',{section:'one',options,routes:{A:'three',B:'submit'}}),q('skipped','short',{section:'two'}),q('last','short',{section:'three'})]};
+ await save([...site.forms,form]);assert.deepEqual(sectionPath(migrateForm(form),{route:'A'}),['one','three']);assert.deepEqual(validateAnswers(migrateForm(form),{route:'B'}),{});
+ const a=await request('respond','POST',{form:form.id,answers:{route:'A',last:'yes',skipped:'Do not store'}});assert.equal(a.status,201);const saved=(await request('stats','GET',undefined,true)).body.responses.find(r=>r.id===a.body.id);assert.equal(saved.value.skipped,undefined);
+ assert.equal((await request('respond','POST',{form:form.id,answers:{route:'B'}})).status,201);
+ const invalid=structuredClone(form);invalid.questions[0].routes.A='one';assert.throws(()=>validateDefinition(migrateForm(invalid)),/suivante/);
+});
+test('response limits are enforced for simultaneous submissions, dates and toggles close forms',async()=>{
+ const f={id:'limited',title:'Une place',published:true,maxResponses:1,questions:[q('name','short')]};await save([...site.forms,f]);
+ const results=await Promise.all([1,2,3].map(i=>request('respond','POST',{form:f.id,answers:{name:'Student '+i}})));assert.equal(results.filter(r=>r.status===201).length,1);assert.equal(results.filter(r=>r.status===409).length,2);
+ assert.equal((await request('site')).body.forms.find(x=>x.id===f.id).closed,'limit');
+ assert.equal(closedReason({...f,accepting:false}),'closed');assert.equal(closedReason({...f,closeDate:'2020-01-01'}),'date');
+ const closed={...f,id:'closed',accepting:false};await save([...site.forms,closed]);assert.equal((await request('respond','POST',{form:closed.id,answers:{name:'x'}})).status,409);
+});
+test('draft autosave stays private and does not modify published content',async()=>{
+ const f={id:'draft',title:'Private',published:true,questions:[q('x','short')]};assert.equal((await request('drafts/draft','PUT',f,true)).status,200);assert.ok((await request('drafts','GET',undefined,true)).body.some(x=>x.id==='draft'));assert.ok(!(await request('site')).body.forms.some(x=>x.id==='draft'));
+ assert.equal((await request('drafts/draft','DELETE',undefined,true)).status,200);
+ const stale={...site,revision:-1};assert.equal((await request('site','PUT',stale,true)).status,409);
+});
+test('file size, MIME spoofing and content mismatches are rejected before storage',async()=>{
+ const f={id:'upload',title:'Upload',published:true,questions:[q('file','file',{allowedTypes:['application/pdf'],maxBytes:262144})]};await save([...site.forms,f]);
+ for(const file of [{name:'x.pdf',type:'application/pdf',size:5,data:Buffer.from('hello').toString('base64')},{name:'x.exe',type:'application/x-msdownload',size:5,data:'aGVsbG8='},{name:'x.pdf',type:'application/pdf',size:999999,data:'aGVsbG8='}]){const r=await request('respond','POST',{form:f.id,answers:{file}});assert.equal(r.status,422);assert.ok(r.body.errors.file);}
+ assert.equal(readdirSync(path.join(dir,'data/uploads')).length,0);
+});
+test('published and expired logo fallback and visit analytics',async()=>{
+ const logo='data:image/png;base64,aGVsbG8=';assert.equal(activeLogo({logo,temporaryLogo:logo,logoUntil:'2000-01-01'}),logo);assert.equal(activeLogo({logo,temporaryLogo:'data:image/png;base64,eA==',logoUntil:'2099-01-01'}),'data:image/png;base64,eA==');
+ const draft={id:'hidden',title:'Hidden',published:false,questions:[]};await save([...site.forms,draft]);assert.ok(!(await request('site')).body.forms.some(f=>f.id==='hidden'));
+ await request('visit','POST',{page:'/forms/legacy'});const s=(await request('stats','GET',undefined,true)).body;assert.equal(s.formVisits.find(v=>v.page==='/forms/legacy').count,1);assert.equal(s.visits.reduce((a,b)=>a+b.count,0),1);
+});
+test('team migration, unique president, ordering, homepage cap and grouped full page',async()=>{
+ const old=migrateMembers([{name:'Amal El Fassi',role:'Présidente'}])[0];assert.equal(old.firstName,'Amal');assert.equal(old.lastName,'El Fassi');assert.equal(memberName(old),'Amal El Fassi');
+ const members=Array.from({length:11},(_,i)=>({id:'member-'+i,firstName:'Membre',lastName:String(i),displayOrder:i,isPresident:i===10,group:i<5?'Commissions':'Organisation',groupAr:i<5?'اللجان':'التنظيم',groupOrder:i<5?1:2}));
+ assert.equal(orderedMembers(members)[0].id,'member-10');assert.equal((homeTeam(members).match(/class="bureau-card"/g)||[]).length,8);assert.equal((teamPage(members).match(/class="bureau-card"/g)||[]).length,10);assert.match(teamPage(members,'ar'),/اللجان/);assert.match(teamPage(members),/president-feature/);
+ const invalid=await request('site','PUT',{...site,members:members.map((m,i)=>({...m,isPresident:i>8}))},true);assert.equal(invalid.status,400);assert.match(invalid.body.error,/seul/);
+ const valid=await request('site','PUT',{...site,members},true);assert.equal(valid.status,200);site=(await request('site','GET',undefined,true)).body;
+ const direct=await fetch(pub+'/team');assert.equal(direct.status,200);assert.match(await direct.text(),/team-footer.css/);
+ const seo=await(await fetch(pub+'/')).text();assert.ok(seo.includes('content="'+pub+'/assets/social.png"'));
+ await request('visit','POST',{page:'/team'});const visits=(await request('stats','GET',undefined,true)).body.visits;assert.equal(visits.reduce((a,b)=>a+b.count,0),2);
+});
+test('editable footer is bilingual, hides missing contacts and rejects unsafe links',async()=>{
+ const footer={description:'Le collectif',descriptionAr:'الفريق',email:'club@example.com',whatsapp:'+212600000000',facebook:'https://www.facebook.com/example',address:'Casablanca',addressAr:'الدار البيضاء',map:'https://maps.example.com/club',links:[{label:'Notre collectif',labelAr:'مجتمعنا',url:'/#about'},{label:'Équipe',labelAr:'الفريق',url:'/team'}]};
+ const r=await request('site','PUT',{...site,footer},true);assert.equal(r.status,200);site=(await request('site','GET',undefined,true)).body;
+ assert.match(footerView(site,'ar'),/الفريق/);assert.match(footerView(site),/mailto:club@example.com/);assert.match(footerView(site),/https:\/\/wa.me\/212600000000/);assert.ok(!footerView({...site,footer:{}}).includes('mailto:'));
+ assert.equal((await request('site','PUT',{...site,footer:{...footer,map:'javascript:alert(1)'}},true)).status,400);
+ assert.match(footerView(site),/Notre collectif/);
+ assert.equal((await request('site','PUT',{...site,footer:{...footer,links:[{label:'Unsafe',url:'//external.example'}]}},true)).status,400);
 });
