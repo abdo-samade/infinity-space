@@ -20,6 +20,6 @@
 .faculty-logo{background:transparent;border:0;border-radius:0;padding:0}
 
 /* Keep the featured portrait at the same 4:5 framing at every bureau size. */
-.home-bureau>.president-home{align-self:start}.home-bureau>.president-home .member-portrait{display:block;position:relative;width:100%;height:auto;min-height:0;max-height:none;aspect-ratio:4/5;flex:none}.home-bureau>.president-home .member-portrait>img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;object-position:center top}
+.home-bureau>.president-home{align-self:start}.home-bureau>.president-home .member-portrait{display:block;position:relative;width:100%;height:auto;min-height:0;max-height:none;aspect-ratio:4/5;flex:none}.home-bureau>.president-home .member-portrait>img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;object-position:center center}
 .news-item h3,.news-item p{overflow-wrap:anywhere}
 @media(max-width:600px){.news-item{grid-template-columns:minmax(0,1fr);gap:20px}.news-item .announcement-poster{justify-self:center;height:7cm}}
