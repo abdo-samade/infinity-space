@@ -15,7 +15,7 @@ db.exec(`PRAGMA journal_mode=WAL; CREATE TABLE IF NOT EXISTS content (id TEXT PR
  CREATE INDEX IF NOT EXISTS response_form ON responses(form); CREATE INDEX IF NOT EXISTS visit_created ON visits(created);`);
 if (!db.prepare('PRAGMA table_info(responses)').all().some(c=>c.name==='snapshot')) db.exec('ALTER TABLE responses ADD COLUMN snapshot TEXT');
 const initial = {forms:[], announcements:[], members:[], logo:'', facultyLogo:'', temporaryLogo:'', logoUntil:'', revision:0};
-function getSite(){const stored=db.prepare('SELECT value FROM content WHERE id=?').get('site');const site={...initial,...(stored?JSON.parse(stored.value):{})};site.forms=site.forms.map(migrateForm);site.members=migrateMembers(site.members);return site;}
+function getSite(){const stored=db.prepare('SELECT value FROM content WHERE id=?').get('site');const site={...initial,...(stored?JSON.parse(stored.value):{})};site.forms=site.forms.map(migrateForm);site.members=migrateMembers(site.members);for(const [key,name] of [['logo','logo-club.png'],['facultyLogo','logo-fsbm.png']])if(existsSync(path.resolve('public/assets',name)))site[key]='/assets/'+name;return site;}
 // Preserve historical labels before the first edit after upgrading the application.
 for (const row of db.prepare('SELECT id,form FROM responses WHERE snapshot IS NULL').all()) {
  const form=getSite().forms.find(f=>f.id===row.form);db.prepare('UPDATE responses SET snapshot=? WHERE id=?').run(JSON.stringify(form || {title:'Formulaire archivé',questions:[],sections:[]}),row.id);
@@ -112,8 +112,8 @@ export function createServer(admin=false){return http.createServer(async(req,res
   }catch(err){db.exec('ROLLBACK');for(const name of written)try{unlinkSync(path.join(dataDir,'uploads',name));}catch{}throw err;}
  }
  if(p.startsWith('/api/'))return json(res,404,{error:'Not found'});
- if(p==='/brand-logo'){const logo=activeLogo(getSite());const match=logo.match(/^data:(image\/(?:png|jpeg|webp));base64,(.+)$/);if(match){res.setHeader('Content-Type',match[1]);return res.end(Buffer.from(match[2],'base64'));}return serve(res,path.resolve('public/assets/mark.svg'));}
- const shared=p.startsWith('/shared/'),root=path.resolve(shared?'public':admin?'admin':'public');
+ if(p==='/brand-logo'){const logo=activeLogo(getSite());const match=logo.match(/^data:(image\/(?:png|jpeg|webp));base64,(.+)$/);if(match){res.setHeader('Content-Type',match[1]);return res.end(Buffer.from(match[2],'base64'));}if(logo.startsWith('/assets/'))return serve(res,path.resolve('public','.'+logo));res.writeHead(204);return res.end();}
+ const shared=p.startsWith('/shared/'),root=path.resolve(shared||p.startsWith('/assets/')?'public':admin?'admin':'public');
  let requested=shared?p.slice(7):p;
  if(requested==='/'||(!path.extname(requested)&&!shared))requested='/index.html';
  const file=path.resolve(root,'.'+decodeURIComponent(requested));if(!file.startsWith(root+path.sep))return json(res,404,{error:'Not found'});

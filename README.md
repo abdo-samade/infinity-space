@@ -26,9 +26,9 @@ Les variables `PORT`, `ADMIN_PORT`, `DATA_DIR` et `COOKIE_SECURE` sont optionnel
 
 ## Identité, logos et pied de page
 
-Dans **Identité**, charger le logo du club et le logo officiel de la faculté. Les fichiers joints dans une conversation ne sont pas automatiquement des fichiers du dépôt : aucun logo original n’est inventé ou reconstitué. Tant que le bureau n’a pas chargé les originaux, un mot-symbole SVG sert de remplacement et la faculté est identifiée par son nom.
+Dans **Identité**, charger le logo du club et le logo officiel de la faculté. Les fichiers joints dans une conversation ne sont pas automatiquement des fichiers du dépôt : aucun logo original n’est inventé ou reconstitué. Sans les originaux, seul le nom du club apparaît et la faculté est identifiée par son nom. Aucun logo de remplacement n’est affiché.
 
-Les logos PNG/JPEG/WebP (1 Mo maximum) sont contenus dans une tuile neutre avec `object-fit: contain` : jamais étirés ni recadrés, y compris un fichier horizontal ou sur fond blanc. Aperçu immédiat sur fond clair et sombre. Le logo événementiel remplace l’original jusqu’à sa date d’expiration ; le retour est calculé à chaque chargement. Le favicon suit le logo chargé. Le SVG de remplacement est fourni dans `public/assets/mark.svg`.
+Les logos PNG/JPEG/WebP (1 Mo maximum) sont contenus dans une tuile neutre avec `object-fit: contain` : jamais étirés ni recadrés, y compris un fichier horizontal ou sur fond blanc. Aperçu immédiat sur fond clair et sombre. Le logo événementiel remplace l’original jusqu’à sa date d’expiration ; le retour est calculé à chaque chargement. Le favicon suit le logo chargé. Pour les charger directement dans GitHub : ouvrir `public/assets`, choisir **Add file → Upload files**, puis déposer `logo-club.png` et `logo-fsbm.png` et valider **Commit changes**. Ces vrais fichiers PNG sont détectés automatiquement et ont priorité sur les logos originaux de l’admin. Récupérer ensuite les changements dans Codespaces avec `git pull origin main` et actualiser.
 
 Le pied de page propose une invitation à s’inscrire, quatre colonnes, les informations FSBM en français/arabe, la signature graphique, le changement de langue et le retour en haut. Modifier dans Identité : description FR/AR, Instagram, e-mail, WhatsApp (chiffres avec indicatif), Facebook, adresse FR/AR et lien de carte. Les coordonnées absentes restent masquées. Les liens de navigation possèdent un libellé FR/AR et une destination interne ou HTTPS, modifiables dans Identité.
 
@@ -98,3 +98,5 @@ Les données locales `data/` sont ignorées par Git. Sauvegarder `club.sqlite` *
 ## Déploiement
 
 GitHub contient le code ; Codespaces permet de le tester. Aucun de ces deux éléments ne constitue un hébergement permanent du site. Pour publier, prévoir un hébergement Node 24 avec disque persistant, les deux origines distinctes et HTTPS, `COOKIE_SECURE=1`, un mot de passe fort et des sauvegardes. Les sessions expirent après 8 h et sont invalidées au redémarrage ; les tentatives de connexion sont limitées en mémoire. L’admin doit être réservé au bureau. Avant une ouverture publique durable : comptes individuels pour la passation, protection anti-spam des formulaires et politique de conservation des données. Ne pas partager une URL d’administration publique ni un mot de passe dans le dépôt.
+
+La largeur publique utilise `--max: 1680px` (1920px sur très grand écran) et `--gutter` pour réduire les marges latérales. Le téléphone conserve une marge de 22px.

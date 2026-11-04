@@ -5,3 +5,4 @@
 @media(max-width:1150px){.member-editor-layout{grid-template-columns:1fr}.member-live-panel{position:static}.member-live-panel .bureau-card{max-width:280px}}
 @media(max-width:760px){.mobile-logout{display:inline-flex}.workspace-badge{margin-inline-start:auto}.crop-dialog{padding:20px}.crop-controls{gap:15px}.member-editor-layout{gap:0}.member-live-panel{order:-1}.member-live-panel .bureau-card{max-width:220px}}
 .footer-link-row{border:1px solid var(--line);padding:18px;border-radius:5px;margin-block:15px}.footer-link-row .field{margin-block:10px}
+@media(min-width:761px){main#app{max-width:none;padding-inline:clamp(24px,3vw,52px)}.admin-topbar{padding-inline:clamp(24px,3vw,52px)}}

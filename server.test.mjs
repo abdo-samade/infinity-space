@@ -1,6 +1,6 @@
 import {test, before, after} from 'node:test';
 import assert from 'node:assert/strict';
-import {mkdtempSync, cpSync, rmSync, mkdirSync, readdirSync} from 'node:fs';
+import {mkdtempSync, cpSync, rmSync, mkdirSync, readdirSync, writeFileSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {DatabaseSync} from 'node:sqlite';
 import path from 'node:path';
@@ -36,7 +36,7 @@ test('migrates legacy fields and snapshots existing responses without losing lab
 test('admin is separate, authenticated, CSRF guarded; static assets have correct MIME',async()=>{
  const r=await fetch(admin+'/api/stats');assert.equal(r.status,401);assert.equal((await request('login','POST',{})).status,404);
  const csrf=await fetch(admin+'/api/site',{method:'PUT',headers:{cookie,Origin:'https://elsewhere.example'},body:JSON.stringify(site)});assert.equal(csrf.status,403);
- for(const [origin,file,type] of [[pub,'/','text/html'],[pub,'/forms-core.js','text/javascript'],[admin,'/shared/form-view.js','text/javascript'],[admin,'/preview.html','text/html'],[pub,'/assets/mark.svg','image/svg+xml']]){const r=await fetch(origin+file);assert.equal(r.status,200,file);assert.ok(r.headers.get('content-type').startsWith(type));}
+ for(const [origin,file,type] of [[pub,'/','text/html'],[pub,'/forms-core.js','text/javascript'],[admin,'/shared/form-view.js','text/javascript'],[admin,'/preview.html','text/html'],[pub,'/assets/social.svg','image/svg+xml']]){const r=await fetch(origin+file);assert.equal(r.status,200,file);assert.ok(r.headers.get('content-type').startsWith(type));}
 });
 test('all eleven types validate on the server, files are private, snapshots persist',async()=>{
  const form={id:'all-types',title:'Tous les types',published:true,questions:[q('short','short',{validation:{preset:'email'}}),q('long','long'),q('choice','choice',{options,other:true}),q('checks','checkboxes',{options,other:true}),q('drop','dropdown',{options}),q('scale','scale',{min:1,max:10}),q('grid','grid',{rows:['R1','R2'],columns:['C1','C2']}),q('checkgrid','checkboxGrid',{rows:['R1'],columns:['C1','C2']}),q('date','date'),q('time','time'),q('file','file',{allowedTypes:['text/plain'],maxBytes:262144})]};
@@ -100,4 +100,12 @@ test('editable footer is bilingual, hides missing contacts and rejects unsafe li
  assert.equal((await request('site','PUT',{...site,footer:{...footer,map:'javascript:alert(1)'}},true)).status,400);
  assert.match(footerView(site),/Notre collectif/);
  assert.equal((await request('site','PUT',{...site,footer:{...footer,links:[{label:'Unsafe',url:'//external.example'}]}},true)).status,400);
+});
+test('official repository logos are detected without changing content or restarting',async()=>{
+ const bytes=Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=','base64');
+ const before=(await request('site')).body;assert.equal(before.logo,'');assert.equal((await fetch(pub+'/brand-logo')).status,204);
+ for(const name of ['logo-club.png','logo-fsbm.png'])writeFileSync(path.join(dir,'public/assets',name),bytes);
+ const after=(await request('site')).body;assert.equal(after.logo,'/assets/logo-club.png');assert.equal(after.facultyLogo,'/assets/logo-fsbm.png');
+ const favicon=await fetch(pub+'/brand-logo');assert.equal(favicon.headers.get('content-type'),'image/png');assert.deepEqual(Buffer.from(await favicon.arrayBuffer()),bytes);
+ assert.equal((await fetch(admin+'/assets/logo-club.png')).status,200);
 });
